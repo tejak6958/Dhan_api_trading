@@ -1,30 +1,31 @@
 # Dhan Trading Bot
 
-Automated options trading bot for NIFTY & BANKNIFTY using Dhan HQ API.
+Sandbox paper-trading bot for NIFTY & BANKNIFTY using the Dhan HQ API.
 
-## Features
-- Live WebSocket feed from Dhan
-- EMA + RSI signal generation
-- Delta & Gamma Greeks filter
-- ATM option selection (CE/PE)
-- Telegram alerts for every trade
-- Sandbox mode for safe testing
-- Local scrip master cache (weekly refresh)
-- End-of-day backtest report to Telegram
+## What this project does
+- Polls Dhan sandbox intraday candle data every 60 seconds
+- Runs three signal strategies: Order Block, Breakout Trend Follower, EMA/RSI
+- Applies option Greeks filters before taking a trade
+- Selects ATM CE/PE options for NIFTY and BANKNIFTY
+- Sends Telegram alerts for entries, exits, and reports
+- Uses paper orders only; no real capital is placed in sandbox mode
+- Caches `scrip_master.csv` locally and refreshes it weekly
 
 ---
 
-## Folder Structure
+## Current repository structure
 ```
-dhan-bot/
-├── dhan_bot_v2.py       ← main bot
-├── requirements.txt     ← all dependencies
-├── .env                 ← your credentials (never committed)
-├── .gitignore           ← files excluded from Git
-├── scrip_master.csv     ← auto-downloaded, excluded from Git
-├── trades.csv           ← generated at runtime
-└── README.md
+Dhan_api.py
+requirements.txt
+README.md
+.gitignore
 ```
+
+## Required files (do not commit)
+- `.env`  ← your credentials and bot settings
+- `scrip_master.csv`  ← downloaded automatically at runtime
+- `sandbox_trades.csv`  ← paper trades log
+- `sandbox_backtest_report.txt`  ← daily report output
 
 ---
 
@@ -36,24 +37,27 @@ git clone https://github.com/YOUR_USERNAME/dhan-bot.git
 cd dhan-bot
 ```
 
-### 2. Create a virtual environment (recommended)
+### 2. Create a virtual environment
 ```bash
 python -m venv venv
+```
 
-# Activate on Windows
-venv\Scripts\activate
+Activate it:
+```bash
+# Windows
+env\Scripts\activate
 
-# Activate on Mac/Linux
+# macOS / Linux
 source venv/bin/activate
 ```
 
-### 3. Install all dependencies
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Create your .env file
-Create a file named `.env` in the project folder:
+### 4. Create your `.env` file
+Create a file named `.env` in the project folder with:
 ```
 CLIENT_ID=your_dhan_client_id
 ACCESS_TOKEN=your_dhan_access_token
@@ -61,34 +65,40 @@ BOT_TOKEN=your_telegram_bot_token
 CHAT_ID=your_telegram_chat_id
 ```
 
-### 5. Run in Sandbox (safe test mode)
-Make sure `USE_SANDBOX = True` in `dhan_bot_v2.py`, then:
+### 5. Run the bot
 ```bash
-python dhan_bot_v2.py
+python Dhan_api.py
 ```
 
-### 6. Switch to Live trading
-Set `USE_SANDBOX = False` in `dhan_bot_v2.py` only after sandbox testing is successful.
+### 6. Notes about sandbox mode
+- `Dhan_api.py` is already configured for sandbox mode using:
+  `SANDBOX_BASE_URL = "https://sandbox.dhan.co/v2"`
+- Dhan sandbox does not support WebSocket in this script; it uses historical candle polling.
+- The script performs paper trading only; there is no real-money order placement.
 
 ---
 
-## How to create Git repository (first time only)
-
-```bash
-# Inside your project folder
-git init
-git add .
-git commit -m "Initial commit"
-
-# Push to GitHub (create repo on github.com first)
-git remote add origin https://github.com/YOUR_USERNAME/dhan-bot.git
-git push -u origin main
-```
+## Dependency summary
+The bot relies on:
+- `dhanhq`
+- `pandas`
+- `numpy`
+- `pandas_ta`
+- `scipy`
+- `requests`
+- `python-dotenv`
 
 ---
 
-## Important Notes
-- Never commit your `.env` file or share your ACCESS_TOKEN
-- Sandbox mode uses paper trades — no real money
-- Scrip master CSV auto-refreshes every 7 days
-- Bot auto-generates daily report at 15:30 and sends to Telegram
+## GitHub visibility / hiding code
+- If your repository is public, the code is visible to anyone.
+- You cannot hide source code in a public GitHub repository once it is committed.
+- To keep code private, use a private GitHub repository or do not push it to GitHub.
+- Use `.gitignore` to prevent local secrets like `.env` from being committed.
+
+---
+
+## Important reminders
+- Never commit `.env` or any credentials file.
+- Do not publish your `ACCESS_TOKEN`, `CLIENT_ID`, `BOT_TOKEN`, or `CHAT_ID`.
+- This script is designed for sandbox/paper trading, not live capital deployment.
