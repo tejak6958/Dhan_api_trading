@@ -33,8 +33,8 @@ README.md
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/dhan-bot.git
-cd dhan-bot
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd YOUR_REPO
 ```
 
 ### 2. Create a virtual environment
@@ -45,7 +45,7 @@ python -m venv venv
 Activate it:
 ```bash
 # Windows
-env\Scripts\activate
+venv\Scripts\activate
 
 # macOS / Linux
 source venv/bin/activate
