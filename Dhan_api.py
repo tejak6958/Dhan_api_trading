@@ -51,6 +51,16 @@ def log_info(message: str):
 def log_error(message: str):
     logger.error(message)
 
+# ── MARKET HOURS CHECK ───────────────────────────────────────
+def is_market_open() -> bool:
+    """Check if current time is within market hours (09:15 - 15:30 IST)."""
+    now = datetime.now()
+    # NSE market hours: 09:15 - 15:30 IST (Monday-Friday)
+    # Note: This is simplified; excludes weekends and holidays
+    market_open = now.hour > 9 or (now.hour == 9 and now.minute >= 15)
+    market_close = now.hour < 15 or (now.hour == 15 and now.minute < 30)
+    return market_open and market_close
+
 # ── SANDBOX BASE URL ─────────────────────────────────────────
 SANDBOX_BASE_URL = "https://sandbox.dhan.co/v2"
 
@@ -183,7 +193,12 @@ def fetch_candles(security_id: str, exchange: str = "NSE_EQ",
     """
     Fetch today's intraday candles from Dhan historical API.
     Returns DataFrame with columns: open, high, low, close, volume, timestamp.
+    Returns empty DataFrame if market is not open or API fails.
     """
+    # Skip API call if market is not open
+    if not is_market_open():
+        return pd.DataFrame()
+    
     today = datetime.now().strftime("%Y-%m-%d")
     try:
         # Dhan intraday candle API
@@ -220,8 +235,13 @@ def fetch_candles(security_id: str, exchange: str = "NSE_EQ",
         df = df.dropna().reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"[CANDLE FETCH ERROR] {e}")
-        log_error(f"Candle fetch error for security_id={security_id}: {e}")
+        error_msg = str(e)
+        if "500" in error_msg or "502" in error_msg or "503" in error_msg:
+            # Server error likely due to market not open or API issue
+            log_info(f"Candle fetch for security_id={security_id}: API returned server error (likely market closed): {error_msg}")
+        else:
+            print(f"[CANDLE FETCH ERROR] {e}")
+            log_error(f"Candle fetch error for security_id={security_id}: {e}")
         return pd.DataFrame()
 
 # ── GREEKS ────────────────────────────────────────────────────
@@ -543,11 +563,16 @@ def process_index(index: str, sid: str):
 
     df = fetch_candles(sid)
     if df.empty or len(df) < 60:
-        print(f"[{index}] Not enough candle data yet ({len(df)} bars)")
+        if df.empty:
+            # No data means either market not open or API issue
+            pass  # Suppress message; logged in fetch_candles if error
+        else:
+            log_info(f"[{index}] Insufficient candle data: {len(df)} bars (need 60)")
         return
 
     ltp = float(df.iloc[-1]["close"])
     print(f"[{index}] LTP={ltp:.2f}  bars={len(df)}")
+    log_info(f"[{index}] Processing: LTP={ltp:.2f}, bars={len(df)}")
 
     data = indices[index]
 
@@ -687,8 +712,9 @@ while True:
 
     # Market hours: 09:15 – 15:30 IST
     if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-        print(f"[{now.strftime('%H:%M')}] Market not open yet — waiting for 09:15 IST")
-        log_info(f"Market closed/pre-market at {now.strftime('%H:%M')} IST")
+        msg = f"[{now.strftime('%H:%M')}] Market not open — waiting for market open at 09:15 IST"
+        print(msg)
+        log_info(f"Pre-market at {now.strftime('%H:%M')} IST")
         time.sleep(60)
         continue
 
