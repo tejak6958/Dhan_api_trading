@@ -1,0 +1,23 @@
+# =============================================
+# Dhan Trading Bot — Python Dependencies
+# Install all with: pip install -r requirements.txt
+# =============================================
+
+# Dhan broker SDK
+dhanhq
+
+# Data handling
+pandas
+numpy
+
+# Technical indicators (EMA, RSI etc.)
+pandas_ta
+
+# Black-Scholes Greeks (Delta, Gamma)
+scipy
+
+# HTTP requests (Telegram alerts, CSV download)
+requests
+
+# Load credentials from .env file
+python-dotenv

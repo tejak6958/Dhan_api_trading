@@ -10,6 +10,7 @@ Sandbox paper-trading bot for NIFTY & BANKNIFTY using the Dhan HQ API.
 - Simulates paper orders only; no real capital is placed in sandbox mode
 - Sends Telegram alerts for entries, exits, daily report, and health checks
 - Caches `scrip_master.csv` locally and refreshes it weekly
+- Writes runtime status and errors to `dhan_bot.log`
 - Writes sandbox trade logs and end-of-day backtest summaries
 - Uses Dhan historical candle polling because sandbox WebSocket is unavailable
 

@@ -1,0 +1,16 @@
+# Sensitive credentials
+.env
+
+# Auto-generated data files
+scrip_master.csv
+trades.csv
+report.txt
+backtest_report.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
