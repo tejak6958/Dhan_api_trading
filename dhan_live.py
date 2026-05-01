@@ -28,6 +28,11 @@ from dhanhq import dhanhq, DhanContext
 from dhanhq.marketfeed import MarketFeed
 from dotenv import load_dotenv
 
+# ── STRATEGY MODULES ──────────────────────────────────────────
+from strategies_order_block import detect_order_blocks, order_block_signal
+from strategies_breakout_trend import breakout_trend_signal
+from strategies_ema_rsi import ema_rsi_confirmation
+
 # ── ENV ──────────────────────────────────────────────────────
 load_dotenv()
 CLIENT_ID    = os.getenv("CLIENT_ID")
@@ -340,31 +345,41 @@ def ema_rsi_signal(df: pd.DataFrame):
 def combined_signal(df: pd.DataFrame, index: str, ltp: float):
     """
     Fire only when ≥2 of 3 strategies agree.
+    Uses imported strategy modules for cleaner code organization.
     Returns ('BUY'|'SELL'|None, strategy_label).
     """
     votes_buy, votes_sell = 0, 0
     labels_buy, labels_sell = [], []
 
-    bull_ob, bear_ob = detect_order_blocks(df)
-    if bull_ob and bull_ob["low"] <= ltp <= bull_ob["high"] * 1.005:
-        votes_buy += 1; labels_buy.append("Order Block")
-    if bear_ob and bear_ob["low"] * 0.995 <= ltp <= bear_ob["high"]:
-        votes_sell += 1; labels_sell.append("Order Block")
+    # 1 ── Order Block
+    ob_sig, bull_ob, bear_ob = order_block_signal(df, index, ltp)
+    if ob_sig == "BUY":
+        votes_buy += 1
+        labels_buy.append("Order Block")
+    elif ob_sig == "SELL":
+        votes_sell += 1
+        labels_sell.append("Order Block")
 
-    btf_sig, buy_lvl, stop_lvl = btf_signal(df)
+    # 2 ── Breakout Trend Follower
+    btf_sig, buy_lvl, stop_lvl = breakout_trend_signal(df, index, ltp)
     if btf_sig == "BUY":
-        votes_buy += 1; labels_buy.append("BTF")
+        votes_buy += 1
+        labels_buy.append("BTF")
     elif btf_sig == "SELL":
-        votes_sell += 1; labels_sell.append("BTF")
+        votes_sell += 1
+        labels_sell.append("BTF")
 
-    er_sig = ema_rsi_signal(df)
+    # 3 ── EMA/RSI
+    er_sig = ema_rsi_confirmation(df, index, ltp)
     if er_sig == "BUY":
-        votes_buy += 1; labels_buy.append("EMA/RSI")
+        votes_buy += 1
+        labels_buy.append("EMA/RSI")
     elif er_sig == "SELL":
-        votes_sell += 1; labels_sell.append("EMA/RSI")
+        votes_sell += 1
+        labels_sell.append("EMA/RSI")
 
     if votes_buy >= 2:
-        return "BUY",  " + ".join(labels_buy)
+        return "BUY", " + ".join(labels_buy)
     if votes_sell >= 2:
         return "SELL", " + ".join(labels_sell)
     return None, ""

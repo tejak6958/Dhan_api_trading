@@ -27,6 +27,11 @@ from scipy.stats import norm
 from dhanhq import dhanhq, DhanContext
 from dotenv import load_dotenv
 
+# ── STRATEGY MODULES ──────────────────────────────────────────
+from strategies_order_block import detect_order_blocks, order_block_signal
+from strategies_breakout_trend import breakout_trend_signal
+from strategies_ema_rsi import ema_rsi_confirmation
+
 # ── ENV ──────────────────────────────────────────────────────
 load_dotenv()
 CLIENT_ID    = os.getenv("CLIENT_ID")
@@ -291,140 +296,14 @@ def select_option(index: str, ltp: float, signal: str):
     delta, gamma = bs_greeks(ltp, strike, T, RISK_FREE, IV_ASSUMED, opt_type)
     return str(int(row["SEM_SM_ID"])), row["SEM_TRADING_SYMBOL"], expiry_str, delta, gamma
 
-# ── ORDER BLOCK DETECTOR (Python port of Pine) ────────────────
-
-def detect_order_blocks(df: pd.DataFrame, periods: int = OB_PERIODS,
-                         threshold: float = OB_THRESHOLD):
-    """
-    Returns (bull_ob, bear_ob) — latest identified Order Blocks as dicts,
-    or None if not found.
-    Logic matches the Pine script in OrderBlock.txt:
-      Bullish OB : last red candle before `periods` consecutive green candles
-                   with abs % move >= threshold.
-      Bearish OB : last green candle before `periods` consecutive red candles
-                   with abs % move >= threshold.
-    """
-    if len(df) < periods + 2:
-        return None, None
-
-    ob_idx = -(periods + 1)           # candle at ob_period position
-    ob_candle = df.iloc[ob_idx]
-
-    # % move from OB close to last candle close
-    abs_move = abs((df.iloc[-1]["close"] - ob_candle["close"]) /
-                   ob_candle["close"]) * 100
-    rel_move = abs_move >= threshold
-
-    tail = df.iloc[-(periods):]       # last `periods` candles
-
-    # Bullish OB: OB candle is red, subsequent all green
-    bull_ob = None
-    if ob_candle["close"] < ob_candle["open"] and rel_move:
-        up_candles = (tail["close"] > tail["open"]).sum()
-        if up_candles == periods:
-            bull_ob = {
-                "high" : ob_candle["open"],      # open is upper for bullish OB
-                "low"  : ob_candle["low"],
-                "avg"  : (ob_candle["open"] + ob_candle["low"]) / 2,
-            }
-
-    # Bearish OB: OB candle is green, subsequent all red
-    bear_ob = None
-    if ob_candle["close"] > ob_candle["open"] and rel_move:
-        down_candles = (tail["close"] < tail["open"]).sum()
-        if down_candles == periods:
-            bear_ob = {
-                "high": ob_candle["high"],
-                "low" : ob_candle["open"],       # open is lower for bearish OB
-                "avg" : (ob_candle["high"] + ob_candle["open"]) / 2,
-            }
-
-    return bull_ob, bear_ob
-
-# ── BREAKOUT TREND FOLLOWER (Python port of Pine) ─────────────
-
-def pivot_high(highs, pvt_len: int = BTF_PVT_LEN):
-    """Return most recent confirmed swing high value."""
-    if len(highs) < 2 * pvt_len + 1:
-        return None
-    for i in range(len(highs) - pvt_len - 1, pvt_len - 1, -1):
-        if all(highs[i] >= highs[i - j] for j in range(1, pvt_len + 1)) and \
-           all(highs[i] >= highs[i + j] for j in range(1, pvt_len + 1)):
-            return highs[i]
-    return None
-
-def pivot_low(lows, pvt_len: int = BTF_PVT_LEN):
-    """Return most recent confirmed swing low value."""
-    if len(lows) < 2 * pvt_len + 1:
-        return None
-    for i in range(len(lows) - pvt_len - 1, pvt_len - 1, -1):
-        if all(lows[i] <= lows[i - j] for j in range(1, pvt_len + 1)) and \
-           all(lows[i] <= lows[i + j] for j in range(1, pvt_len + 1)):
-            return lows[i]
-    return None
-
-def btf_signal(df: pd.DataFrame) -> tuple:
-    """
-    Breakout Trend Follower signal.
-    Returns (signal, buy_level, stop_level) where signal is 'BUY'/'SELL'/None.
-    Matches Pine strategy in Breakout_Trend_follower.txt:
-      - BUY  when high > swing_high AND close > MA filter
-      - SELL when low  < swing_low  (trailing stop)
-    """
-    if len(df) < BTF_MA_LEN + 2 * BTF_PVT_LEN + 2:
-        return None, None, None
-
-    closes = df["close"].tolist()
-    highs  = df["high"].tolist()
-    lows   = df["low"].tolist()
-
-    # MA filter
-    if BTF_MA_TYPE == "EMA":
-        ma_val = df["close"].ewm(span=BTF_MA_LEN, adjust=False).mean().iloc[-1]
-    else:
-        ma_val = df["close"].rolling(BTF_MA_LEN).mean().iloc[-1]
-
-    buy_level  = pivot_high(highs)
-    stop_level = pivot_low(lows)
-
-    if buy_level is None or stop_level is None:
-        return None, buy_level, stop_level
-
-    last_high  = highs[-1]
-    last_low   = lows[-1]
-    last_close = closes[-1]
-
-    if last_high > buy_level and last_close > ma_val:
-        return "BUY", buy_level, stop_level
-    if last_low < stop_level:
-        return "SELL", buy_level, stop_level
-    return None, buy_level, stop_level
-
-# ── EMA + RSI SIGNAL (original layer) ─────────────────────────
-
-def ema_rsi_signal(df: pd.DataFrame):
-    d = df.copy()
-    d["ema20"] = ta.ema(d["close"], length=20)
-    d["ema50"] = ta.ema(d["close"], length=50)
-    d["rsi"]   = ta.rsi(d["close"], length=14)
-    d.dropna(inplace=True)
-    if d.empty:
-        return None
-    last = d.iloc[-1]
-    if last["ema20"] > last["ema50"] and last["rsi"] > 55:
-        return "BUY"
-    if last["ema20"] < last["ema50"] and last["rsi"] < 45:
-        return "SELL"
-    return None
-
-# ── COMBINED SIGNAL ───────────────────────────────────────────
+# ── COMBINED SIGNAL (using imported strategy modules) ────────
 
 def combined_signal(df: pd.DataFrame, index: str, ltp: float):
     """
     Combine all three strategies:
-      • Order Block (institutional support / resistance zone)
-      • Breakout Trend Follower (swing breakout + MA filter)
-      • EMA/RSI (momentum confirmation)
+      • Order Block (from strategies_order_block.py)
+      • Breakout Trend Follower (from strategies_breakout_trend.py)
+      • EMA/RSI (from strategies_ema_rsi.py)
     Signal is only fired when at least 2 of 3 agree.
     Returns 'BUY', 'SELL', or None.
     """
@@ -432,34 +311,25 @@ def combined_signal(df: pd.DataFrame, index: str, ltp: float):
     votes_sell = 0
 
     # 1 ── Order Block
-    bull_ob, bear_ob = detect_order_blocks(df)
-    if bull_ob:
-        # Price is near / inside bullish OB zone → bullish signal
-        if bull_ob["low"] <= ltp <= bull_ob["high"] * 1.005:
-            votes_buy += 1
-            print(f"[OB] {index}: Bullish OB zone {bull_ob['low']:.1f}–{bull_ob['high']:.1f}  → BUY vote")
-    if bear_ob:
-        if bear_ob["low"] * 0.995 <= ltp <= bear_ob["high"]:
-            votes_sell += 1
-            print(f"[OB] {index}: Bearish OB zone {bear_ob['low']:.1f}–{bear_ob['high']:.1f}  → SELL vote")
+    ob_sig, bull_ob, bear_ob = order_block_signal(df, index, ltp)
+    if ob_sig == "BUY":
+        votes_buy += 1
+    elif ob_sig == "SELL":
+        votes_sell += 1
 
     # 2 ── Breakout Trend Follower
-    btf_sig, buy_lvl, stop_lvl = btf_signal(df)
+    btf_sig, buy_lvl, stop_lvl = breakout_trend_signal(df, index, ltp)
     if btf_sig == "BUY":
         votes_buy  += 1
-        print(f"[BTF] {index}: Breakout above {buy_lvl:.1f}  → BUY vote")
     elif btf_sig == "SELL":
         votes_sell += 1
-        print(f"[BTF] {index}: Breakdown below {stop_lvl:.1f}  → SELL vote")
 
     # 3 ── EMA / RSI
-    er_sig = ema_rsi_signal(df)
+    er_sig = ema_rsi_confirmation(df, index, ltp)
     if er_sig == "BUY":
         votes_buy  += 1
-        print(f"[EMA/RSI] {index}  → BUY vote")
     elif er_sig == "SELL":
         votes_sell += 1
-        print(f"[EMA/RSI] {index}  → SELL vote")
 
     if votes_buy >= 2:
         return "BUY"
