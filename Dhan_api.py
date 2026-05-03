@@ -100,18 +100,11 @@ def log_error(msg: str): logger.error(msg)
 
 # ── MARKET HOURS CHECK ───────────────────────────────────────
 # NSE holidays 2025 (add/remove as needed)
-NSE_HOLIDAYS_2025 = {
-    "2025-01-26",  # Republic Day
-    "2025-03-14",  # Holi
-    "2025-04-14",  # Dr. Ambedkar Jayanti
-    "2025-04-18",  # Good Friday
-    "2025-05-01",  # Maharashtra Day
-    "2025-08-15",  # Independence Day
-    "2025-10-02",  # Gandhi Jayanti
-    "2025-10-24",  # Dussehra
-    "2025-11-05",  # Diwali Laxmi Puja
-    "2025-11-15",  # Gurunanak Jayanti
-    "2025-12-25",  # Christmas
+NSE_HOLIDAYS_2026 = {
+    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26",
+    "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02",
+    "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"
 }
 
 def is_market_open() -> bool:
@@ -129,7 +122,7 @@ def is_market_open() -> bool:
 
     # Holiday check
     today_str = now.strftime("%Y-%m-%d")
-    if today_str in NSE_HOLIDAYS_2025:
+    if today_str in NSE_HOLIDAYS_2026:
         return False
 
     # Time check: 09:15 to 15:30
@@ -143,7 +136,7 @@ def market_status_reason() -> str:
     if now.weekday() >= 5:
         return f"Weekend ({now.strftime('%A')})"
     today_str = now.strftime("%Y-%m-%d")
-    if today_str in NSE_HOLIDAYS_2025:
+    if today_str in NSE_HOLIDAYS_2026:
         return f"NSE Holiday ({today_str})"
     start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
     end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -157,7 +150,7 @@ def market_status_reason() -> str:
 SANDBOX_BASE_URL = "https://sandbox.dhan.co/v2"
 
 # ── TRADING CONFIG ───────────────────────────────────────────
-LOT_SIZES   = {"NIFTY": 75, "BANKNIFTY": 30}
+LOT_SIZES   = {"NIFTY": 65, "BANKNIFTY": 30}
 RISK_FREE   = 0.068        # ~10yr G-sec yield
 IV_ASSUMED  = 0.15         # fallback IV (15%)
 
@@ -676,7 +669,7 @@ while True:
         continue
 
     today_str = now.strftime("%Y-%m-%d")
-    if today_str in NSE_HOLIDAYS_2025:
+    if today_str in NSE_HOLIDAYS_2026:
         print(f"[{now.strftime('%H:%M')}] NSE Holiday ({today_str}) — sleeping 1 hour.")
         log_info(f"NSE Holiday {today_str} — sleeping 1h")
         time.sleep(3600)

@@ -128,17 +128,18 @@ def log_info(msg: str):  logger.info(msg)
 def log_error(msg: str): logger.error(msg)
 
 # ── MARKET HOURS + HOLIDAY CHECK ─────────────────────────────
-NSE_HOLIDAYS_2025 = {
-    "2025-01-26", "2025-03-14", "2025-04-14", "2025-04-18",
-    "2025-05-01", "2025-08-15", "2025-10-02", "2025-10-24",
-    "2025-11-05", "2025-11-15", "2025-12-25",
+NSE_HOLIDAYS_2026 = {
+    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26",
+    "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02",
+    "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"
 }
 
 def is_market_open() -> bool:
     now = datetime.now()
     if now.weekday() >= 5:
         return False
-    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2025:
+    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026:
         return False
     start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
     end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -149,7 +150,7 @@ def market_status_reason() -> str:
     if now.weekday() >= 5:
         return f"Weekend ({now.strftime('%A')})"
     ds = now.strftime("%Y-%m-%d")
-    if ds in NSE_HOLIDAYS_2025:
+    if ds in NSE_HOLIDAYS_2026:
         return f"NSE Holiday ({ds})"
     start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
     end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -163,7 +164,7 @@ def market_status_reason() -> str:
 LIVE_BASE_URL = "https://api.dhan.co/v2"
 
 # ── TRADING CONFIG ───────────────────────────────────────────
-LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30}
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30}
 #
 # HOW LOT SIZES WORK IN AUTO-TRADING:
 #   NIFTY    → every BUY/SELL order places qty=75 units
@@ -837,7 +838,15 @@ feed = MarketFeed(
 
 print("\n🔌 Starting DhanHQ WebSocket live feed…")
 
+
+
 while True:
+    if os.path.exists("STOP"):
+        os.remove("STOP")
+        send_alert("⛔ STOP file detected — shutting down cleanly")
+        run_session_report()
+        break
+
     now = datetime.now()
 
     # ── Weekend / Holiday — don't even try to connect ────────
@@ -849,7 +858,7 @@ while True:
         continue
 
     ds = now.strftime("%Y-%m-%d")
-    if ds in NSE_HOLIDAYS_2025:
+    if ds in NSE_HOLIDAYS_2026:
         print(f"[{now.strftime('%H:%M')}] NSE Holiday ({ds}) — sleeping 1h.")
         log_info(f"NSE Holiday {ds} — sleeping 1h")
         time.sleep(3600)
