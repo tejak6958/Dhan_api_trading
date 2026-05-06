@@ -10,8 +10,9 @@
 ==============================================================
 """
 
-import requests
 import logging
+
+import requests
 
 logger = logging.getLogger("DhanBot")
 
@@ -31,21 +32,24 @@ logger = logging.getLogger("DhanBot")
 #   Right: option premium = Rs.200    -> 0.5% slip = Rs.1.00
 #          (realistic bid-ask spread on ATM option)
 #
-SANDBOX_SLIPPAGE_PCT = 0.010   # [Item ii] raised from 0.005 (0.5%) → 0.010 (1.0%)
+SANDBOX_SLIPPAGE_PCT = 0.015  # [Item ii] raised: 0.5% → 1.0% → 1.5%
+# ATM NIFTY option ~Rs.150 → slip = Rs.2.25/fill
+# ATM BANKNIFTY option ~Rs.200 → slip = Rs.3.00/fill
+# Realistic for typical NSE FnO bid-ask spread
 
 # Fallback option premium when sandbox API is unavailable
 _FALLBACK_PREMIUM = {
-    "NIFTY"    : 150.0,
+    "NIFTY": 150.0,
     "BANKNIFTY": 200.0,
 }
 
 
 # ── OPTION PREMIUM FETCHER ────────────────────────────────────
 
-def fetch_option_premium(opt_sid: str, index: str,
-                         sandbox_base_url: str,
-                         access_token: str,
-                         client_id: str) -> float:
+
+def fetch_option_premium(
+    opt_sid: str, index: str, sandbox_base_url: str, access_token: str, client_id: str
+) -> float:
     """
     Fetch the OPTION's own market price (LTP) from Dhan quote API.
     Used so slippage is applied to the option premium, not the index.
@@ -64,21 +68,23 @@ def fetch_option_premium(opt_sid: str, index: str,
         float option LTP, or fallback premium if fetch fails
     """
     try:
-        url     = f"{sandbox_base_url}/marketfeed/ltp"
+        url = f"{sandbox_base_url}/marketfeed/ltp"
         headers = {
             "access-token": access_token,
-            "client-id"   : client_id,
+            "client-id": client_id,
             "Content-Type": "application/json",
         }
-        r = requests.post(url, json={"NSE_FNO": [int(opt_sid)]},
-                          headers=headers, timeout=5)
+        r = requests.post(
+            url, json={"NSE_FNO": [int(opt_sid)]}, headers=headers, timeout=5
+        )
         r.raise_for_status()
-        data    = r.json()
-        ltp_val = (data
-                   .get("data", {})
-                   .get("NSE_FNO", {})
-                   .get(str(opt_sid), {})
-                   .get("last_price", 0))
+        data = r.json()
+        ltp_val = (
+            data.get("data", {})
+            .get("NSE_FNO", {})
+            .get(str(opt_sid), {})
+            .get("last_price", 0)
+        )
         if ltp_val and float(ltp_val) > 0:
             logger.info(f"[OPT PREMIUM] sid={opt_sid} LTP=Rs.{ltp_val:.2f}")
             return float(ltp_val)
@@ -86,15 +92,16 @@ def fetch_option_premium(opt_sid: str, index: str,
         logger.info(f"[OPT PREMIUM] fetch failed sid={opt_sid}: {e}")
 
     fallback = _FALLBACK_PREMIUM.get(index, 200.0)
-    logger.info(f"[OPT PREMIUM] Using fallback Rs.{fallback:.0f} "
-                f"(sid={opt_sid})")
+    logger.info(f"[OPT PREMIUM] Using fallback Rs.{fallback:.0f} (sid={opt_sid})")
     return fallback
 
 
 # ── PAPER FILL SIMULATOR ──────────────────────────────────────
 
-def simulate_fill(ltp: float, side: str,
-                  slippage_pct: float = SANDBOX_SLIPPAGE_PCT) -> float:
+
+def simulate_fill(
+    ltp: float, side: str, slippage_pct: float = SANDBOX_SLIPPAGE_PCT
+) -> float:
     """
     Simulate a realistic fill price for sandbox paper trades.
 

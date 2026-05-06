@@ -184,8 +184,10 @@ MAX_DAILY_LOSS = -15000
 RECONNECT_DELAY = 30
 WEBHOOK_PORT = 5002
 
-# [Item ii] Raised from Rs.1.00 to Rs.2.00 (matches 1% slippage in sandbox)
-SLIPPAGE_BUFFER = 2.00
+# [Item ii] Raised: Rs.1.00 → Rs.2.00 → Rs.3.00
+# Rs.3 buffer ensures LIMIT orders fill on ATM options with wider spreads
+# (NIFTY ATM spread typically Rs.2–5; BANKNIFTY Rs.5–10)
+SLIPPAGE_BUFFER = 3.00
 FILL_POLL_RETRIES = 6
 FILL_POLL_DELAY = 0.5
 

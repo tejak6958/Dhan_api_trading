@@ -114,24 +114,44 @@ def detect_order_blocks(
 def order_block_signal(df: pd.DataFrame, index: str, ltp: float):
     """
     Evaluate Order Block signal.
-    Returns (signal, bull_ob, bear_ob) where signal is 'BUY', 'SELL', or None.
+
+    Returns (signal, bull_ob, bear_ob) where signal is:
+      'BUY'  — price inside / touching bullish OB zone only
+      'SELL' — price inside / touching bearish OB zone only
+      'BOTH' — price simultaneously inside BOTH OB zones
+               (range-bound; caller places parallel CE + PE)
+      None   — price not near any OB zone (hard gate: no trade)
+
+    FIX [Item v]: previously `signal` was set to 'BUY' then
+    overwritten to 'SELL' when both zones were active, so the
+    parallel 'BOTH' signal never fired. Now uses near_bull /
+    near_bear flags before assigning final signal.
     """
     bull_ob, bear_ob = detect_order_blocks(df)
-    signal = None
 
-    if bull_ob:
-        # Price is near / inside bullish OB zone → bullish signal
-        if bull_ob["low"] <= ltp <= bull_ob["high"] * 1.005:
-            signal = "BUY"
-            print(
-                f"[OB] {index}: Bullish OB zone {bull_ob['low']:.1f}–{bull_ob['high']:.1f}  → BUY vote"
-            )
+    # Check proximity for each OB zone independently
+    near_bull = bull_ob is not None and bull_ob["low"] <= ltp <= bull_ob["high"] * 1.005
+    near_bear = bear_ob is not None and bear_ob["low"] * 0.995 <= ltp <= bear_ob["high"]
 
-    if bear_ob:
-        if bear_ob["low"] * 0.995 <= ltp <= bear_ob["high"]:
-            signal = "SELL"
-            print(
-                f"[OB] {index}: Bearish OB zone {bear_ob['low']:.1f}–{bear_ob['high']:.1f}  → SELL vote"
-            )
+    if near_bull:
+        print(
+            f"[OB] {index}: Bullish OB {bull_ob['low']:.1f}–{bull_ob['high']:.1f}"
+            f" ltp={ltp:.1f} → BUY zone"
+        )
+    if near_bear:
+        print(
+            f"[OB] {index}: Bearish OB {bear_ob['low']:.1f}–{bear_ob['high']:.1f}"
+            f" ltp={ltp:.1f} → SELL zone"
+        )
+
+    # Determine signal — BOTH fires when price is in both zones simultaneously
+    if near_bull and near_bear:
+        signal = "BOTH"
+    elif near_bull:
+        signal = "BUY"
+    elif near_bear:
+        signal = "SELL"
+    else:
+        signal = None
 
     return signal, bull_ob, bear_ob
