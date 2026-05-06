@@ -6,6 +6,12 @@ scrip_master.csv
 trades.csv
 report.txt
 backtest_report.txt
+sandbox_backtest_report.txt
+sandbox_trades.csv
+ticks_*.csv
+
+# Nested clone directory
+Dhan_api_trading/
 
 # Python cache
 __pycache__/

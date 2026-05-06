@@ -25,36 +25,44 @@
 ==============================================================
 """
 
-import math
 import logging
-import pandas as pd
+import math
 from datetime import datetime
-from strategies_order_block import order_block_signal, detect_order_blocks
+
+import pandas as pd
+from Strategies.strategies_order_block import detect_order_blocks, order_block_signal
 
 logger = logging.getLogger("DhanBot")
 
 # ── GREEKS CONFIG ─────────────────────────────────────────────
-MIN_DELTA = 0.30    # skip OTM options with |delta| < this
-MAX_GAMMA = 0.005   # skip options near expiry with gamma > this
+MIN_DELTA = 0.30  # skip OTM options with |delta| < this
+MAX_GAMMA = 0.005  # skip options near expiry with gamma > this
 
 # Risk-free rate and assumed IV for Black-Scholes in sandbox
-_RISK_FREE_RATE = 0.065   # 6.5% Indian repo rate
-_DEFAULT_IV     = 0.15    # 15% assumed IV (ATM NIFTY typical)
+_RISK_FREE_RATE = 0.065  # 6.5% Indian repo rate
+_DEFAULT_IV = 0.15  # 15% assumed IV (ATM NIFTY typical)
 
 
 # ── BLACK-SCHOLES GREEKS ──────────────────────────────────────
+
 
 def _norm_cdf(x: float) -> float:
     """Approximation of standard normal CDF."""
     return (1.0 + math.erf(x / math.sqrt(2))) / 2.0
 
+
 def _norm_pdf(x: float) -> float:
     return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
-def bs_greeks(S: float, K: float, T: float,
-              r: float = _RISK_FREE_RATE,
-              sigma: float = _DEFAULT_IV,
-              option_type: str = "CE") -> tuple[float, float]:
+
+def bs_greeks(
+    S: float,
+    K: float,
+    T: float,
+    r: float = _RISK_FREE_RATE,
+    sigma: float = _DEFAULT_IV,
+    option_type: str = "CE",
+) -> tuple[float, float]:
     """
     Black-Scholes Delta and Gamma for a European option.
 
@@ -72,13 +80,13 @@ def bs_greeks(S: float, K: float, T: float,
     if T <= 0 or S <= 0 or K <= 0 or sigma <= 0:
         return (0.0, 0.0)
     try:
-        d1    = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        d2    = d1 - sigma * math.sqrt(T)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
         gamma = _norm_pdf(d1) / (S * sigma * math.sqrt(T))
         if option_type == "CE":
             delta = _norm_cdf(d1)
         else:
-            delta = _norm_cdf(d1) - 1.0   # PE delta is negative
+            delta = _norm_cdf(d1) - 1.0  # PE delta is negative
         return (round(delta, 4), round(gamma, 6))
     except Exception:
         return (0.0, 0.0)
@@ -86,9 +94,10 @@ def bs_greeks(S: float, K: float, T: float,
 
 # ── ATM OPTION SELECTOR ───────────────────────────────────────
 
-def select_option(df_master: pd.DataFrame,
-                  index: str, ltp: float,
-                  signal: str) -> tuple:
+
+def select_option(
+    df_master: pd.DataFrame, index: str, ltp: float, signal: str
+) -> tuple:
     """
     Select the nearest ATM option for the given index and signal direction.
 
@@ -108,10 +117,9 @@ def select_option(df_master: pd.DataFrame,
     opt_type = "CE" if signal == "BUY" else "PE"
 
     # Filter for this index and option type
-    mask = (
-        df_master["SEM_TRADING_SYMBOL"].str.startswith(index) &
-        df_master["SEM_OPTION_TYPE"].str.upper().eq(opt_type)
-    )
+    mask = df_master["SEM_TRADING_SYMBOL"].str.startswith(index) & df_master[
+        "SEM_OPTION_TYPE"
+    ].str.upper().eq(opt_type)
     candidates = df_master[mask].copy()
 
     if candidates.empty:
@@ -128,8 +136,7 @@ def select_option(df_master: pd.DataFrame,
             .astype(float)
         )
     else:
-        candidates["_strike"] = pd.to_numeric(
-            candidates[strike_col], errors="coerce")
+        candidates["_strike"] = pd.to_numeric(candidates[strike_col], errors="coerce")
 
     candidates = candidates.dropna(subset=["_strike"])
 
@@ -139,29 +146,30 @@ def select_option(df_master: pd.DataFrame,
 
     # Nearest ATM strike
     candidates["_dist"] = (candidates["_strike"] - ltp).abs()
-    row     = candidates.loc[candidates["_dist"].idxmin()]
-    strike  = float(row["_strike"])
-    sid     = str(row["SEM_SMST_SECURITY_ID"])
-    name    = str(row["SEM_TRADING_SYMBOL"])
-    expiry  = str(row.get("SEM_EXPIRY_DATE", "UNKNOWN"))
+    row = candidates.loc[candidates["_dist"].idxmin()]
+    strike = float(row["_strike"])
+    sid = str(row["SEM_SMST_SECURITY_ID"])
+    name = str(row["SEM_TRADING_SYMBOL"])
+    expiry = str(row.get("SEM_EXPIRY_DATE", "UNKNOWN"))
 
     # Approximate days to expiry for Greeks
     try:
         exp_dt = datetime.strptime(expiry[:10], "%Y-%m-%d")
         T = max((exp_dt - datetime.now()).days / 365, 1 / 365)
     except Exception:
-        T = 7 / 365   # fallback: 7 days
+        T = 7 / 365  # fallback: 7 days
 
     delta, gamma = bs_greeks(ltp, strike, T, option_type=opt_type)
 
     logger.info(
         f"[SELECT OPT] {index} {opt_type} strike={strike:.0f} "
-        f"sid={sid} delta={delta:.3f} gamma={gamma:.5f} T={T*365:.0f}d"
+        f"sid={sid} delta={delta:.3f} gamma={gamma:.5f} T={T * 365:.0f}d"
     )
     return (sid, name, expiry, delta, gamma)
 
 
 # ── ENGULFING DETECTORS (Item iii) ────────────────────────────
+
 
 def _bullish_engulfing(df: pd.DataFrame) -> bool:
     """
@@ -177,10 +185,10 @@ def _bullish_engulfing(df: pd.DataFrame) -> bool:
     prev = df.iloc[-2]
     curr = df.iloc[-1]
     return (
-        prev["close"] < prev["open"] and      # prev is red
-        curr["close"] > curr["open"] and      # curr is green
-        curr["open"]  <= prev["close"] and    # opens inside/below prev body
-        curr["close"] >= prev["open"]         # closes above prev body top
+        prev["close"] < prev["open"]  # prev is red
+        and curr["close"] > curr["open"]  # curr is green
+        and curr["open"] <= prev["close"]  # opens inside/below prev body
+        and curr["close"] >= prev["open"]  # closes above prev body top
     )
 
 
@@ -198,17 +206,17 @@ def _bearish_engulfing(df: pd.DataFrame) -> bool:
     prev = df.iloc[-2]
     curr = df.iloc[-1]
     return (
-        prev["close"] > prev["open"] and      # prev is green
-        curr["close"] < curr["open"] and      # curr is red
-        curr["open"]  >= prev["close"] and    # opens inside/above prev body
-        curr["close"] <= prev["open"]         # closes below prev body bottom
+        prev["close"] > prev["open"]  # prev is green
+        and curr["close"] < curr["open"]  # curr is red
+        and curr["open"] >= prev["close"]  # opens inside/above prev body
+        and curr["close"] <= prev["open"]  # closes below prev body bottom
     )
 
 
 # ── COMBINED SIGNAL ───────────────────────────────────────────
 
-def combined_signal(df: pd.DataFrame, index: str,
-                    ltp: float) -> tuple[str | None, str]:
+
+def combined_signal(df: pd.DataFrame, index: str, ltp: float) -> tuple[str | None, str]:
     """
     Evaluate all active strategies and return a combined signal.
 
@@ -274,7 +282,5 @@ def combined_signal(df: pd.DataFrame, index: str,
         return ("SELL", "OB+BearEng")
 
     # OB signal present but engulfing doesn't confirm → wait
-    logger.info(
-        f"[SIGNAL] {index}: OB={ob_signal} but no matching engulfing — wait"
-    )
+    logger.info(f"[SIGNAL] {index}: OB={ob_signal} but no matching engulfing — wait")
     return (None, f"ob_{ob_signal.lower()}_no_eng")
