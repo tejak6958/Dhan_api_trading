@@ -15,53 +15,62 @@
 ==============================================================
 """
 
+import logging
 import os
 import sys
-import time
 import threading
-import logging
-import pandas as pd
-import requests
+import time
 from datetime import datetime, timedelta
-from dhanhq import dhanhq, DhanContext
-from dotenv import load_dotenv
 from functools import partial
 
-# ── DHANBOT MODULES ───────────────────────────────────────────
-from Scripts.greeks_options  import (combined_signal, select_option,
-                              MIN_DELTA, MAX_GAMMA)
-from Scripts.websocket_feed  import build_feed, make_on_message
-from Scripts.webhook_trade   import execute_signal, start_webhook
-from Scripts.tick_recorder   import TickRecorder
+import pandas as pd
+import requests
+from dhanhq import DhanContext, dhanhq
+from dotenv import load_dotenv
 
 # [Item vii] Disable EMA/RSI strategy if still present in greeks_options
 import Scripts.greeks_options as _go
+
+# ── DHANBOT MODULES ───────────────────────────────────────────
+from Scripts.greeks_options import MAX_GAMMA, MIN_DELTA, combined_signal, select_option
+from Scripts.tick_recorder import TickRecorder
+from Scripts.webhook_trade import execute_signal, start_webhook
+from Scripts.websocket_feed import build_feed, make_on_message
+
 if hasattr(_go, "ema_rsi_confirmation"):
-    _go.ema_rsi_confirmation = lambda df, index: (None, "disabled")
+    _go.ema_rsi_confirmation = lambda df, index, ltp=None: (None, "disabled")
     print("[Item vii] EMA/RSI strategy DISABLED in combined_signal")
 
 # ── ENV ──────────────────────────────────────────────────────
 load_dotenv()
-CLIENT_ID       = os.getenv("CLIENT_ID")
-ACCESS_TOKEN    = os.getenv("ACCESS_TOKEN")
-BOT_TOKEN       = os.getenv("BOT_TOKEN")
-CHAT_ID         = os.getenv("CHAT_ID")
-TOKEN_TYPE      = os.getenv("TOKEN_TYPE", "web").lower()
+CLIENT_ID = os.getenv("CLIENT_ID")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+TOKEN_TYPE = os.getenv("TOKEN_TYPE", "web").lower()
 TOKEN_ISSUED_AT = os.getenv("TOKEN_ISSUED_AT", "")
+
 
 # ── VALIDATE ENV ─────────────────────────────────────────────
 def validate_env():
-    missing = [n for n, v in [("CLIENT_ID", CLIENT_ID),
-                               ("ACCESS_TOKEN", ACCESS_TOKEN),
-                               ("BOT_TOKEN", BOT_TOKEN),
-                               ("CHAT_ID", CHAT_ID)]
-               if not v or not v.strip()]
+    missing = [
+        n
+        for n, v in [
+            ("CLIENT_ID", CLIENT_ID),
+            ("ACCESS_TOKEN", ACCESS_TOKEN),
+            ("BOT_TOKEN", BOT_TOKEN),
+            ("CHAT_ID", CHAT_ID),
+        ]
+        if not v or not v.strip()
+    ]
     if missing:
         print(f"MISSING ENV VARIABLES: {', '.join(missing)}")
         sys.exit(1)
     print("ENV variables loaded OK")
 
+
 validate_env()
+
 
 # ── TOKEN EXPIRY GUARD ────────────────────────────────────────
 def check_token_expiry():
@@ -72,8 +81,8 @@ def check_token_expiry():
         print("TOKEN_ISSUED_AT not set. Recommend TOKEN_TYPE=api for live.")
         return
     try:
-        issued    = datetime.fromisoformat(TOKEN_ISSUED_AT)
-        age       = datetime.now() - issued
+        issued = datetime.fromisoformat(TOKEN_ISSUED_AT)
+        age = datetime.now() - issued
         remaining = timedelta(hours=24) - age
         if age > timedelta(hours=23):
             print(f"TOKEN EXPIRED (age={age}). LIVE BLOCKED. Regenerate token.")
@@ -88,41 +97,68 @@ def check_token_expiry():
     except ValueError:
         print(f"TOKEN_ISSUED_AT format invalid: '{TOKEN_ISSUED_AT}'")
 
+
 check_token_expiry()
 
 # ── LOGGING ──────────────────────────────────────────────────
 LOG_FILE = "dhan_live.log"
-logger   = logging.getLogger("DhanBot")
+logger = logging.getLogger("DhanBot")
 logger.setLevel(logging.INFO)
 
 fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-fh.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+fh.setFormatter(
+    logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+)
 logger.addHandler(fh)
 
 ch = logging.StreamHandler(sys.stdout)
-ch.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+ch.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+)
 logger.addHandler(ch)
 
-def log_info(msg):  logger.info(msg)
-def log_error(msg): logger.error(msg)
+
+def log_info(msg):
+    logger.info(msg)
+
+
+def log_error(msg):
+    logger.error(msg)
+
 
 # ── MARKET HOURS ─────────────────────────────────────────────
 NSE_HOLIDAYS_2026 = {
-    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26",
-    "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
-    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02",
-    "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"
+    "2026-01-15",
+    "2026-01-26",
+    "2026-03-03",
+    "2026-03-26",
+    "2026-03-31",
+    "2026-04-03",
+    "2026-04-14",
+    "2026-05-01",
+    "2026-05-28",
+    "2026-06-26",
+    "2026-09-14",
+    "2026-10-02",
+    "2026-10-20",
+    "2026-11-10",
+    "2026-11-24",
+    "2026-12-25",
 }
+
 
 def is_market_open() -> bool:
     now = datetime.now()
-    if now.weekday() >= 5: return False
-    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026: return False
-    start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if now.weekday() >= 5:
+        return False
+    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026:
+        return False
+    start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    end = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return start <= now <= end
+
 
 def market_status_reason() -> str:
     now = datetime.now()
@@ -131,40 +167,42 @@ def market_status_reason() -> str:
     ds = now.strftime("%Y-%m-%d")
     if ds in NSE_HOLIDAYS_2026:
         return f"NSE Holiday ({ds})"
-    start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    end = now.replace(hour=15, minute=30, second=0, microsecond=0)
     if now < start:
         return f"Pre-market (opens 09:15, now {now.strftime('%H:%M')})"
     if now > end:
         return f"Post-market (closed 15:30, now {now.strftime('%H:%M')})"
     return "OPEN"
 
+
 # ── CONFIG ────────────────────────────────────────────────────
-LIVE_BASE_URL   = "https://api.dhan.co/v2"
-LOT_SIZES       = {"NIFTY": 65, "BANKNIFTY": 30}
-CANDLE_TICKS    = 300      # [Item iii] was 60 (1-min); now 300 (5-min)
-MAX_DAILY_LOSS  = -15000
+LIVE_BASE_URL = "https://api.dhan.co/v2"
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30}
+CANDLE_TICKS = 300  # [Item iii] was 60 (1-min); now 300 (5-min)
+MAX_DAILY_LOSS = -15000
 RECONNECT_DELAY = 30
-WEBHOOK_PORT    = 5002
+WEBHOOK_PORT = 5002
 
 # [Item ii] Raised from Rs.1.00 to Rs.2.00 (matches 1% slippage in sandbox)
-SLIPPAGE_BUFFER   = 2.00
+SLIPPAGE_BUFFER = 2.00
 FILL_POLL_RETRIES = 6
-FILL_POLL_DELAY   = 0.5
+FILL_POLL_DELAY = 0.5
 
 # ── GLOBALS ──────────────────────────────────────────────────
 BACKTEST_TRADES = []
-ORDER_LOCK      = threading.Lock()
-EOD_DONE        = False
-pnl_state       = {"total_pnl": 0.0, "trade_count": 0, "win_count": 0}
+ORDER_LOCK = threading.Lock()
+EOD_DONE = False
+pnl_state = {"total_pnl": 0.0, "trade_count": 0, "win_count": 0}
 
 # ── TICK RECORDER ────────────────────────────────────────────
 tick_rec = TickRecorder(mode="live")
 
+
 # ── TELEGRAM ─────────────────────────────────────────────────
 def send_alert(msg: str) -> bool:
     try:
-        url  = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         resp = requests.post(
             url,
             data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
@@ -180,9 +218,10 @@ def send_alert(msg: str) -> bool:
         log_error(f"Telegram exception: {e}")
         return False
 
+
 # ── DHAN CLIENT ──────────────────────────────────────────────
 dhan_context = DhanContext(CLIENT_ID, ACCESS_TOKEN)
-dhan         = dhanhq(dhan_context)
+dhan = dhanhq(dhan_context)
 
 try:
     dhan.dhan_http.base_url = LIVE_BASE_URL
@@ -192,22 +231,25 @@ except AttributeError:
     except AttributeError:
         log_error("Could not override base URL -- check dhanhq version")
 
+
 def check_login() -> bool:
     try:
         res = dhan.get_fund_limits()
         if res and res.get("status") == "success":
             bal = res.get("data", {}).get("available_balance", "N/A")
-            msg = (f"LIVE LOGIN OK\n"
-                   f"Balance: Rs.{bal} | Token: {TOKEN_TYPE.upper()}\n"
-                   f"Max Loss: Rs.{abs(MAX_DAILY_LOSS):,}/day\n"
-                   f"Market: {market_status_reason()}\n"
-                   f"Candles: 5-min ({CANDLE_TICKS} ticks) [Item iii]\n"
-                   f"SL: 5%  Target: 10% [Item iv]\n"
-                   f"Slip Buffer: Rs.{SLIPPAGE_BUFFER} [Item ii]\n"
-                   f"RSI/EMA: DISABLED [Item vii]\n"
-                   f"Webhook: port {WEBHOOK_PORT}\n"
-                   f"Ticks: {tick_rec.csv_path}\n"
-                   "REAL ORDERS WILL BE PLACED AUTOMATICALLY")
+            msg = (
+                f"LIVE LOGIN OK\n"
+                f"Balance: Rs.{bal} | Token: {TOKEN_TYPE.upper()}\n"
+                f"Max Loss: Rs.{abs(MAX_DAILY_LOSS):,}/day\n"
+                f"Market: {market_status_reason()}\n"
+                f"Candles: 5-min ({CANDLE_TICKS} ticks) [Item iii]\n"
+                f"SL: 5%  Target: 10% [Item iv]\n"
+                f"Slip Buffer: Rs.{SLIPPAGE_BUFFER} [Item ii]\n"
+                f"RSI/EMA: DISABLED [Item vii]\n"
+                f"Webhook: port {WEBHOOK_PORT}\n"
+                f"Ticks: {tick_rec.csv_path}\n"
+                "REAL ORDERS WILL BE PLACED AUTOMATICALLY"
+            )
             print(msg)
             if not send_alert(msg):
                 print("Telegram delivery failed -- check BOT_TOKEN / CHAT_ID")
@@ -221,19 +263,24 @@ def check_login() -> bool:
         log_error(f"Login error: {e}")
         return False
 
+
 if not check_login():
     print("Stopping -- login failed.")
     sys.exit(1)
 
 # ── SCRIP MASTER ─────────────────────────────────────────────
-MASTER_CSV   = "scrip_master.csv"
-MASTER_URL   = "https://images.dhan.co/api-data/api-scrip-master.csv"
+MASTER_CSV = "scrip_master.csv"
+MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 REFRESH_DAYS = 7
 
+
 def _cache_fresh(fp, days):
-    if not os.path.exists(fp): return False
-    return (datetime.now() - datetime.fromtimestamp(
-        os.path.getmtime(fp))) < timedelta(days=days)
+    if not os.path.exists(fp):
+        return False
+    return (datetime.now() - datetime.fromtimestamp(os.path.getmtime(fp))) < timedelta(
+        days=days
+    )
+
 
 def load_scrip_master():
     if _cache_fresh(MASTER_CSV, REFRESH_DAYS):
@@ -245,10 +292,11 @@ def load_scrip_master():
             f.write(chunk)
     return pd.read_csv(MASTER_CSV, dtype=str, low_memory=False)
 
+
 df_master = load_scrip_master()
 df_master = df_master[
-    df_master["SEM_TRADING_SYMBOL"].str.contains("NIFTY|BANKNIFTY", na=False) &
-    df_master["SEM_INSTRUMENT_NAME"].str.contains("OPT", na=False)
+    df_master["SEM_TRADING_SYMBOL"].str.contains("NIFTY|BANKNIFTY", na=False)
+    & df_master["SEM_INSTRUMENT_NAME"].str.contains("OPT", na=False)
 ].reset_index(drop=True)
 print(f"Filtered master: {len(df_master)} option rows")
 
@@ -257,50 +305,53 @@ INDEX_IDS = {"NIFTY": "13", "BANKNIFTY": "25"}
 
 indices = {
     idx: {
-        "buffer"      : [],
-        "tick_count"  : 0,
-        "in_trade"    : False,
+        "buffer": [],
+        "tick_count": 0,
+        "in_trade": False,
         "order_placed": False,
-        "entry"       : 0.0,
-        "sl"          : 0.0,
-        "target"      : 0.0,
-        "opt_sid"     : None,
-        "qty"         : 0,
-        "name"        : "",
-        "delta"       : 0.0,
-        "gamma"       : 0.0,
-        "signal"      : "",
-        "strategy"    : "",
+        "entry": 0.0,
+        "sl": 0.0,
+        "target": 0.0,
+        "opt_sid": None,
+        "qty": 0,
+        "name": "",
+        "delta": 0.0,
+        "gamma": 0.0,
+        "signal": "",
+        "strategy": "",
     }
     for idx in INDEX_IDS
 }
 
+
 # ── REAL ORDER PLACEMENT ──────────────────────────────────────
 def _fetch_fill_price(order_resp: dict, fallback_ltp: float) -> float:
-    order_id = (order_resp.get("data", {}).get("orderId")
-                or order_resp.get("orderId"))
+    order_id = order_resp.get("data", {}).get("orderId") or order_resp.get("orderId")
     if not order_id:
         return fallback_ltp
     for attempt in range(1, FILL_POLL_RETRIES + 1):
         time.sleep(FILL_POLL_DELAY)
         try:
-            status_resp  = dhan.get_order_by_id(order_id)
-            order_data   = status_resp.get("data", {})
+            status_resp = dhan.get_order_by_id(order_id)
+            order_data = status_resp.get("data", {})
             traded_price = float(order_data.get("tradedPrice", 0) or 0)
             order_status = order_data.get("orderStatus", "")
             if traded_price > 0 and order_status in ("TRADED", "PART_TRADED"):
-                log_info(f"Fill: orderId={order_id} price={traded_price:.2f} "
-                         f"status={order_status} attempt={attempt}")
+                log_info(
+                    f"Fill: orderId={order_id} price={traded_price:.2f} "
+                    f"status={order_status} attempt={attempt}"
+                )
                 return traded_price
         except Exception as e:
             log_error(f"Fill poll error attempt {attempt}: {e}")
-    log_error(f"Could not get fill after {FILL_POLL_RETRIES} attempts -- "
-              f"using fallback {fallback_ltp}")
+    log_error(
+        f"Could not get fill after {FILL_POLL_RETRIES} attempts -- "
+        f"using fallback {fallback_ltp}"
+    )
     return fallback_ltp
 
 
-def place_order(sid: str, qty: int, side, name: str,
-                ltp: float = 0.0) -> dict:
+def place_order(sid: str, qty: int, side, name: str, ltp: float = 0.0) -> dict:
     """
     Place a LIMIT order with slippage buffer via DhanHQ REST API.
     [Item ii] SLIPPAGE_BUFFER = Rs.2.00 (was Rs.1.00).
@@ -314,7 +365,7 @@ def place_order(sid: str, qty: int, side, name: str,
             order_type = dhan.LIMIT
         else:
             limit_price = 0
-            order_type  = dhan.MARKET
+            order_type = dhan.MARKET
             log_error(f"No LTP for {name} -- falling back to MARKET order")
 
         resp = dhan.place_order(
@@ -326,14 +377,18 @@ def place_order(sid: str, qty: int, side, name: str,
             product_type=dhan.INTRA,
             price=limit_price,
         )
-        log_info(f"place_order: {side} {name} qty={qty} "
-                 f"type={order_type} limit={limit_price} -> {resp}")
+        log_info(
+            f"place_order: {side} {name} qty={qty} "
+            f"type={order_type} limit={limit_price} -> {resp}"
+        )
 
-        fill_price   = _fetch_fill_price(resp, ltp)
+        fill_price = _fetch_fill_price(resp, ltp)
         resp["fill_price"] = fill_price
         slippage_pts = round(fill_price - ltp, 2) if ltp > 0 else 0.0
-        log_info(f"[SLIPPAGE] {name} signal_ltp={ltp:.2f} "
-                 f"fill={fill_price:.2f} slip={slippage_pts:+.2f}")
+        log_info(
+            f"[SLIPPAGE] {name} signal_ltp={ltp:.2f} "
+            f"fill={fill_price:.2f} slip={slippage_pts:+.2f}"
+        )
 
         if abs(slippage_pts) > SLIPPAGE_BUFFER * 3:
             send_alert(
@@ -348,6 +403,7 @@ def place_order(sid: str, qty: int, side, name: str,
         send_alert(f"ORDER ERROR ({name}): {e}")
         return {}
 
+
 # ── SESSION REPORT ────────────────────────────────────────────
 def run_session_report():
     global EOD_DONE
@@ -359,20 +415,30 @@ def run_session_report():
         send_alert("Session Report: No trades today.")
         return
 
-    df = pd.DataFrame(BACKTEST_TRADES, columns=[
-        "time", "symbol", "strategy", "reason",
-        "entry", "exit", "pnl", "delta", "gamma"
-    ])
+    df = pd.DataFrame(
+        BACKTEST_TRADES,
+        columns=[
+            "time",
+            "symbol",
+            "strategy",
+            "reason",
+            "entry",
+            "exit",
+            "pnl",
+            "delta",
+            "gamma",
+        ],
+    )
     total_pnl = df["pnl"].sum()
-    wins      = (df["pnl"] > 0).sum()
-    losses    = (df["pnl"] <= 0).sum()
-    win_rate  = wins / len(df) * 100 if len(df) else 0
-    max_dd    = df["pnl"].cumsum().min() if len(df) else 0
+    wins = (df["pnl"] > 0).sum()
+    losses = (df["pnl"] <= 0).sum()
+    win_rate = wins / len(df) * 100 if len(df) else 0
+    max_dd = df["pnl"].cumsum().min() if len(df) else 0
     strat_pnl = df.groupby("strategy")["pnl"].sum().to_string()
 
     report = (
         f"LIVE SESSION REPORT\n"
-        f"{'─'*32}\n"
+        f"{'─' * 32}\n"
         f"Date        : {datetime.now().strftime('%Y-%m-%d')}\n"
         f"Mode        : LIVE\n"
         f"Candles     : 5-min [Item iii]\n"
@@ -387,7 +453,7 @@ def run_session_report():
         f"Avg Delta   : {df['delta'].mean():.3f}\n"
         f"Avg Gamma   : {df['gamma'].mean():.5f}\n"
         f"\nPnL by Strategy:\n{strat_pnl}\n"
-        f"{'─'*32}"
+        f"{'─' * 32}"
     )
     with open("live_session_report.txt", "w", encoding="utf-8") as f:
         f.write(report)
@@ -401,11 +467,13 @@ def log_trade(row: list):
 
 
 def show_dashboard(trade_count, win_count, total_pnl):
-    print(f"\n{'='*44}\n"
-          f"  LIVE  {datetime.now().strftime('%H:%M:%S')}\n"
-          f"  Trades:{trade_count}  Wins:{win_count}  "
-          f"PnL:Rs.{total_pnl:.2f}\n"
-          f"{'='*44}\n")
+    print(
+        f"\n{'=' * 44}\n"
+        f"  LIVE  {datetime.now().strftime('%H:%M:%S')}\n"
+        f"  Trades:{trade_count}  Wins:{win_count}  "
+        f"PnL:Rs.{total_pnl:.2f}\n"
+        f"{'=' * 44}\n"
+    )
 
 
 def check_daily_loss(total_pnl: float) -> bool:
@@ -419,31 +487,32 @@ def check_daily_loss(total_pnl: float) -> bool:
         return True
     return False
 
+
 # ── CONTEXT + WEBSOCKET CALLBACK ─────────────────────────────
 _select_option_fn = partial(select_option, df_master)
 
 live_context = {
-    "indices"         : indices,
-    "order_lock"      : ORDER_LOCK,
+    "indices": indices,
+    "order_lock": ORDER_LOCK,
     "select_option_fn": _select_option_fn,
-    "place_order_fn"  : place_order,
+    "place_order_fn": place_order,
     "fetch_premium_fn": None,
-    "send_alert_fn"   : send_alert,
-    "log_info_fn"     : log_info,
-    "log_error_fn"    : log_error,
-    "lot_sizes"       : LOT_SIZES,
-    "min_delta"       : MIN_DELTA,
-    "max_gamma"       : MAX_GAMMA,
-    "mode"            : "live",
-    "backtest_trades" : BACKTEST_TRADES,
-    "pnl_state"       : pnl_state,
+    "send_alert_fn": send_alert,
+    "log_info_fn": log_info,
+    "log_error_fn": log_error,
+    "lot_sizes": LOT_SIZES,
+    "min_delta": MIN_DELTA,
+    "max_gamma": MAX_GAMMA,
+    "mode": "live",
+    "backtest_trades": BACKTEST_TRADES,
+    "pnl_state": pnl_state,
 }
 
 # [Item iii] CANDLE_TICKS=300 drives the 5-min evaluation gate
 on_message, ws_state = make_on_message(
     indices=indices,
     index_ids=INDEX_IDS,
-    candle_ticks=CANDLE_TICKS,       # 300 = 5-min
+    candle_ticks=CANDLE_TICKS,  # 300 = 5-min
     combined_signal_fn=combined_signal,
     select_option_fn=_select_option_fn,
     place_order_fn=place_order,
@@ -521,10 +590,11 @@ while True:
         continue
 
     if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-        secs = (now.replace(hour=9, minute=14, second=55,
-                            microsecond=0) - now).seconds
-        print(f"[{now.strftime('%H:%M')}] Pre-market -- "
-              f"connecting in {secs//60}m {secs%60}s")
+        secs = (now.replace(hour=9, minute=14, second=55, microsecond=0) - now).seconds
+        print(
+            f"[{now.strftime('%H:%M')}] Pre-market -- "
+            f"connecting in {secs // 60}m {secs % 60}s"
+        )
         time.sleep(min(60, max(secs, 1)))
         continue
 

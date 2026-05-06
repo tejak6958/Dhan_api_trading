@@ -32,56 +32,64 @@
 ==============================================================
 """
 
+import logging
 import os
 import sys
-import time
 import threading
-import logging
-import pandas as pd
-import requests
+import time
 from datetime import datetime, timedelta
-from dhanhq import dhanhq, DhanContext
-from dotenv import load_dotenv
 from functools import partial
 
-# ── DHANBOT MODULES ───────────────────────────────────────────
-from Scripts.greeks_options  import (combined_signal, select_option,
-                              MIN_DELTA, MAX_GAMMA)
-from Scripts.slippage        import (SANDBOX_SLIPPAGE_PCT, fetch_option_premium,
-                              simulate_fill)
-from Scripts.dhan_historical import fetch_candles, fetch_live_ltp
-from Scripts.tick_recorder   import TickRecorder
-from Scripts.webhook_trade   import execute_signal, start_webhook
+import pandas as pd
+import requests
+from dhanhq import DhanContext, dhanhq
+from dotenv import load_dotenv
 
 # [Item vii] Disable EMA/RSI strategy if still present in greeks_options
 import Scripts.greeks_options as _go
+from Scripts.dhan_historical import fetch_candles, fetch_live_ltp
+
+# ── DHANBOT MODULES ───────────────────────────────────────────
+from Scripts.greeks_options import MAX_GAMMA, MIN_DELTA, combined_signal, select_option
+from Scripts.slippage import SANDBOX_SLIPPAGE_PCT, fetch_option_premium, simulate_fill
+from Scripts.tick_recorder import TickRecorder
+from Scripts.webhook_trade import execute_signal, start_webhook
+
 if hasattr(_go, "ema_rsi_confirmation"):
-    _go.ema_rsi_confirmation = lambda df, index: (None, "disabled")
+    _go.ema_rsi_confirmation = lambda df, index, ltp=None: (None, "disabled")
     print("[Item vii] EMA/RSI strategy DISABLED in combined_signal")
 
 # ── ENV ──────────────────────────────────────────────────────
 load_dotenv()
-CLIENT_ID        = os.getenv("CLIENT_ID")
-ACCESS_TOKEN     = os.getenv("ACCESS_TOKEN")
-BOT_TOKEN        = os.getenv("BOT_TOKEN")
-CHAT_ID          = os.getenv("CHAT_ID")
-TOKEN_TYPE       = os.getenv("TOKEN_TYPE", "web").lower()
-TOKEN_ISSUED_AT  = os.getenv("TOKEN_ISSUED_AT", "")
+CLIENT_ID = os.getenv("CLIENT_ID")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+TOKEN_TYPE = os.getenv("TOKEN_TYPE", "web").lower()
+TOKEN_ISSUED_AT = os.getenv("TOKEN_ISSUED_AT", "")
+
 
 # ── VALIDATE ENV ─────────────────────────────────────────────
 def validate_env():
-    missing = [n for n, v in [("CLIENT_ID", CLIENT_ID),
-                               ("ACCESS_TOKEN", ACCESS_TOKEN),
-                               ("BOT_TOKEN", BOT_TOKEN),
-                               ("CHAT_ID", CHAT_ID)]
-               if not v or not v.strip()]
+    missing = [
+        n
+        for n, v in [
+            ("CLIENT_ID", CLIENT_ID),
+            ("ACCESS_TOKEN", ACCESS_TOKEN),
+            ("BOT_TOKEN", BOT_TOKEN),
+            ("CHAT_ID", CHAT_ID),
+        ]
+        if not v or not v.strip()
+    ]
     if missing:
         print(f"MISSING ENV VARIABLES: {', '.join(missing)}")
         print("   -> Check your .env file.")
         sys.exit(1)
     print("ENV variables loaded OK")
 
+
 validate_env()
+
 
 # ── TOKEN EXPIRY GUARD ────────────────────────────────────────
 def check_token_expiry():
@@ -92,8 +100,8 @@ def check_token_expiry():
         print("TOKEN_ISSUED_AT not set in .env. Cannot verify 24h expiry.")
         return
     try:
-        issued    = datetime.fromisoformat(TOKEN_ISSUED_AT)
-        age       = datetime.now() - issued
+        issued = datetime.fromisoformat(TOKEN_ISSUED_AT)
+        age = datetime.now() - issued
         remaining = timedelta(hours=24) - age
         if age > timedelta(hours=23):
             print(f"TOKEN EXPIRED (age={age}). Regenerate ACCESS_TOKEN.")
@@ -102,43 +110,70 @@ def check_token_expiry():
     except ValueError:
         print(f"TOKEN_ISSUED_AT format invalid: '{TOKEN_ISSUED_AT}'.")
 
+
 check_token_expiry()
 
 # ── LOGGING ───────────────────────────────────────────────────
 LOG_FILE = "dhan_bot.log"
-logger   = logging.getLogger("DhanBot")
+logger = logging.getLogger("DhanBot")
 logger.setLevel(logging.INFO)
 
 fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
 fh.setLevel(logging.INFO)
-fh.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+fh.setFormatter(
+    logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+)
 logger.addHandler(fh)
 
 ch = logging.StreamHandler(sys.stdout)
 ch.setLevel(logging.INFO)
-ch.setFormatter(logging.Formatter(
-    "%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+ch.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+)
 logger.addHandler(ch)
 
-def log_info(msg):  logger.info(msg)
-def log_error(msg): logger.error(msg)
+
+def log_info(msg):
+    logger.info(msg)
+
+
+def log_error(msg):
+    logger.error(msg)
+
 
 # ── MARKET HOURS ─────────────────────────────────────────────
 NSE_HOLIDAYS_2026 = {
-    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26",
-    "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
-    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02",
-    "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25"
+    "2026-01-15",
+    "2026-01-26",
+    "2026-03-03",
+    "2026-03-26",
+    "2026-03-31",
+    "2026-04-03",
+    "2026-04-14",
+    "2026-05-01",
+    "2026-05-28",
+    "2026-06-26",
+    "2026-09-14",
+    "2026-10-02",
+    "2026-10-20",
+    "2026-11-10",
+    "2026-11-24",
+    "2026-12-25",
 }
+
 
 def is_market_open() -> bool:
     now = datetime.now()
-    if now.weekday() >= 5: return False
-    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026: return False
-    start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if now.weekday() >= 5:
+        return False
+    if now.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026:
+        return False
+    start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    end = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return start <= now <= end
+
 
 def market_status_reason() -> str:
     now = datetime.now()
@@ -147,33 +182,35 @@ def market_status_reason() -> str:
     ds = now.strftime("%Y-%m-%d")
     if ds in NSE_HOLIDAYS_2026:
         return f"NSE Holiday ({ds})"
-    start = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    end   = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    end = now.replace(hour=15, minute=30, second=0, microsecond=0)
     if now < start:
         return f"Pre-market (opens 09:15, now {now.strftime('%H:%M')})"
     if now > end:
         return f"Post-market (closed 15:30, now {now.strftime('%H:%M')})"
     return "Open"
 
+
 # ── CONFIG ────────────────────────────────────────────────────
 SANDBOX_BASE_URL = "https://sandbox.dhan.co/v2"
-LOT_SIZES        = {"NIFTY": 65, "BANKNIFTY": 30}
-POLL_SLEEP       = 300   # [Item iii] was 60s; now 300s = 5 min (matches candle)
-WEBHOOK_PORT     = 5001
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30}
+POLL_SLEEP = 300  # [Item iii] was 60s; now 300s = 5 min (matches candle)
+WEBHOOK_PORT = 5001
 
 # ── GLOBALS ──────────────────────────────────────────────────
 BACKTEST_TRADES = []
-ORDER_LOCK      = threading.Lock()
-pnl_state       = {"total_pnl": 0.0, "trade_count": 0, "win_count": 0}
+ORDER_LOCK = threading.Lock()
+pnl_state = {"total_pnl": 0.0, "trade_count": 0, "win_count": 0}
 
 # ── TICK RECORDER ────────────────────────────────────────────
 tick_rec = TickRecorder(mode="sandbox")
 log_info(f"Tick recorder -> {tick_rec.csv_path}")
 
+
 # ── TELEGRAM ─────────────────────────────────────────────────
 def send_alert(msg: str) -> bool:
     try:
-        url  = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         resp = requests.post(
             url,
             data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
@@ -189,9 +226,10 @@ def send_alert(msg: str) -> bool:
         log_error(f"Telegram exception: {e}")
         return False
 
+
 # ── DHAN CLIENT ──────────────────────────────────────────────
 dhan_context = DhanContext(CLIENT_ID, ACCESS_TOKEN)
-dhan         = dhanhq(dhan_context)
+dhan = dhanhq(dhan_context)
 
 try:
     dhan.dhan_http.base_url = SANDBOX_BASE_URL
@@ -201,21 +239,24 @@ except AttributeError:
     except AttributeError:
         log_error("Could not override base URL -- check dhanhq version")
 
+
 def check_login() -> bool:
     try:
         res = dhan.get_fund_limits()
         if res and res.get("status") == "success":
             bal = res.get("data", {}).get("available_balance", "N/A")
-            msg = (f"SANDBOX LOGIN OK\n"
-                   f"Balance: {bal} | Token: {TOKEN_TYPE.upper()}\n"
-                   f"Market: {market_status_reason()}\n"
-                   f"Webhook: port {WEBHOOK_PORT}\n"
-                   f"Ticks: {tick_rec.csv_path}\n"
-                   f"Poll: every {POLL_SLEEP}s (5-min candles)\n"
-                   f"SL: 5% | Target: 10% | Slippage: "
-                   f"{SANDBOX_SLIPPAGE_PCT*100:.1f}%\n"
-                   f"Strategies: OrderBlock+Engulfing, BreakoutTrend\n"
-                   f"RSI/EMA: DISABLED")
+            msg = (
+                f"SANDBOX LOGIN OK\n"
+                f"Balance: {bal} | Token: {TOKEN_TYPE.upper()}\n"
+                f"Market: {market_status_reason()}\n"
+                f"Webhook: port {WEBHOOK_PORT}\n"
+                f"Ticks: {tick_rec.csv_path}\n"
+                f"Poll: every {POLL_SLEEP}s (5-min candles)\n"
+                f"SL: 5% | Target: 10% | Slippage: "
+                f"{SANDBOX_SLIPPAGE_PCT * 100:.1f}%\n"
+                f"Strategies: OrderBlock+Engulfing, BreakoutTrend\n"
+                f"RSI/EMA: DISABLED"
+            )
             print(msg)
             send_alert(msg)
             return True
@@ -225,19 +266,24 @@ def check_login() -> bool:
         log_error(f"Login error: {e}")
         return False
 
+
 if not check_login():
     print("Stopping -- login failed.")
     sys.exit(1)
 
 # ── SCRIP MASTER ─────────────────────────────────────────────
-MASTER_CSV   = "scrip_master.csv"
-MASTER_URL   = "https://images.dhan.co/api-data/api-scrip-master.csv"
+MASTER_CSV = "scrip_master.csv"
+MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 REFRESH_DAYS = 7
 
+
 def _cache_fresh(fp, days):
-    if not os.path.exists(fp): return False
-    return (datetime.now() - datetime.fromtimestamp(
-        os.path.getmtime(fp))) < timedelta(days=days)
+    if not os.path.exists(fp):
+        return False
+    return (datetime.now() - datetime.fromtimestamp(os.path.getmtime(fp))) < timedelta(
+        days=days
+    )
+
 
 def load_scrip_master():
     if _cache_fresh(MASTER_CSV, REFRESH_DAYS):
@@ -251,10 +297,11 @@ def load_scrip_master():
             f.write(chunk)
     return pd.read_csv(MASTER_CSV, dtype=str, low_memory=False)
 
+
 df_master = load_scrip_master()
 df_master = df_master[
-    df_master["SEM_TRADING_SYMBOL"].str.contains("NIFTY|BANKNIFTY", na=False) &
-    df_master["SEM_INSTRUMENT_NAME"].str.contains("OPT", na=False)
+    df_master["SEM_TRADING_SYMBOL"].str.contains("NIFTY|BANKNIFTY", na=False)
+    & df_master["SEM_INSTRUMENT_NAME"].str.contains("OPT", na=False)
 ].reset_index(drop=True)
 print(f"Filtered master: {len(df_master)} option rows")
 
@@ -263,31 +310,41 @@ INDEX_IDS = {"NIFTY": "13", "BANKNIFTY": "25"}
 
 indices = {
     idx: {
-        "in_trade": False, "order_placed": False,
-        "entry": 0.0, "sl": 0.0, "target": 0.0,
-        "opt_sid": None, "qty": 0, "name": "",
-        "delta": 0.0, "gamma": 0.0, "signal": "", "strategy": "",
+        "in_trade": False,
+        "order_placed": False,
+        "entry": 0.0,
+        "sl": 0.0,
+        "target": 0.0,
+        "opt_sid": None,
+        "qty": 0,
+        "name": "",
+        "delta": 0.0,
+        "gamma": 0.0,
+        "signal": "",
+        "strategy": "",
     }
     for idx in INDEX_IDS
 }
 
+
 # ── PAPER ORDER ───────────────────────────────────────────────
-def paper_order(sid: str, qty: int, side: str, name: str,
-                ltp: float = 0.0) -> dict:
+def paper_order(sid: str, qty: int, side: str, name: str, ltp: float = 0.0) -> dict:
     """
     Simulate a paper order with slippage applied to the option premium.
     fill_price is returned so callers use it for SL/Target/PnL.
     """
     fill_price = simulate_fill(ltp, side) if ltp > 0 else ltp
-    slip       = round(fill_price - ltp, 2) if ltp > 0 else 0.0
-    ts         = datetime.now().strftime("%H:%M:%S")
-    msg = (f"[PAPER] {ts} | {side} | {name} | qty={qty} | "
-           f"signal_ltp={ltp:.2f} | fill={fill_price:.2f} | "
-           f"slippage={slip:+.2f}")
+    slip = round(fill_price - ltp, 2) if ltp > 0 else 0.0
+    ts = datetime.now().strftime("%H:%M:%S")
+    msg = (
+        f"[PAPER] {ts} | {side} | {name} | qty={qty} | "
+        f"signal_ltp={ltp:.2f} | fill={fill_price:.2f} | "
+        f"slippage={slip:+.2f}"
+    )
     print(msg)
     log_info(msg)
-    return {"status": "success", "orderId": f"PAPER_{ts}",
-            "fill_price": fill_price}
+    return {"status": "success", "orderId": f"PAPER_{ts}", "fill_price": fill_price}
+
 
 # ── CONTEXT ───────────────────────────────────────────────────
 _select_option_fn = partial(select_option, df_master)
@@ -300,20 +357,20 @@ _fetch_premium_fn = partial(
 )
 
 sandbox_context = {
-    "indices"         : indices,
-    "order_lock"      : ORDER_LOCK,
+    "indices": indices,
+    "order_lock": ORDER_LOCK,
     "select_option_fn": _select_option_fn,
-    "place_order_fn"  : paper_order,
+    "place_order_fn": paper_order,
     "fetch_premium_fn": _fetch_premium_fn,
-    "send_alert_fn"   : send_alert,
-    "log_info_fn"     : log_info,
-    "log_error_fn"    : log_error,
-    "lot_sizes"       : LOT_SIZES,
-    "min_delta"       : MIN_DELTA,
-    "max_gamma"       : MAX_GAMMA,
-    "mode"            : "sandbox",
-    "backtest_trades" : BACKTEST_TRADES,
-    "pnl_state"       : pnl_state,
+    "send_alert_fn": send_alert,
+    "log_info_fn": log_info,
+    "log_error_fn": log_error,
+    "lot_sizes": LOT_SIZES,
+    "min_delta": MIN_DELTA,
+    "max_gamma": MAX_GAMMA,
+    "mode": "sandbox",
+    "backtest_trades": BACKTEST_TRADES,
+    "pnl_state": pnl_state,
 }
 
 # ── WEBHOOK ───────────────────────────────────────────────────
@@ -326,33 +383,48 @@ start_webhook(
     mode="SANDBOX",
 )
 
+
 # ── BACKTEST REPORT ───────────────────────────────────────────
 def run_backtest_report():
     if not BACKTEST_TRADES:
         send_alert("Backtest: No trades captured today.")
         return
 
-    df = pd.DataFrame(BACKTEST_TRADES, columns=[
-        "time", "symbol", "strategy", "reason",
-        "entry", "exit", "pnl", "delta", "gamma"
-    ])
+    df = pd.DataFrame(
+        BACKTEST_TRADES,
+        columns=[
+            "time",
+            "symbol",
+            "strategy",
+            "reason",
+            "entry",
+            "exit",
+            "pnl",
+            "delta",
+            "gamma",
+        ],
+    )
     total_pnl = df["pnl"].sum()
-    wins      = (df["pnl"] > 0).sum()
-    losses    = (df["pnl"] <= 0).sum()
-    win_rate  = wins / len(df) * 100 if len(df) else 0
-    max_dd    = df["pnl"].cumsum().min() if len(df) else 0
+    wins = (df["pnl"] > 0).sum()
+    losses = (df["pnl"] <= 0).sum()
+    win_rate = wins / len(df) * 100 if len(df) else 0
+    max_dd = df["pnl"].cumsum().min() if len(df) else 0
     strat_pnl = df.groupby("strategy")["pnl"].sum().to_string()
-    avg_slip  = df.apply(
-        lambda r: (r["entry"] + r["exit"]) * SANDBOX_SLIPPAGE_PCT, axis=1
-    ).mean() if len(df) else 0
+    avg_slip = (
+        df.apply(
+            lambda r: (r["entry"] + r["exit"]) * SANDBOX_SLIPPAGE_PCT, axis=1
+        ).mean()
+        if len(df)
+        else 0
+    )
 
     report = (
         f"SANDBOX BACKTEST REPORT\n"
-        f"{'─'*32}\n"
+        f"{'─' * 32}\n"
         f"Date         : {datetime.now().strftime('%Y-%m-%d')}\n"
         f"Mode         : SANDBOX (paper)\n"
         f"Candles      : 5-min [Item iii]\n"
-        f"Slippage     : {SANDBOX_SLIPPAGE_PCT*100:.1f}% per fill [Item ii]\n"
+        f"Slippage     : {SANDBOX_SLIPPAGE_PCT * 100:.1f}% per fill [Item ii]\n"
         f"SL           : 5%  Target: 10% [Item iv]\n"
         f"Strategies   : OB+Engulfing, BreakoutTrend [Item vii]\n"
         f"Total Trades : {len(df)}\n"
@@ -364,8 +436,8 @@ def run_backtest_report():
         f"Avg Delta    : {df['delta'].mean():.3f}\n"
         f"Avg Gamma    : {df['gamma'].mean():.5f}\n"
         f"\nPnL by Strategy:\n{strat_pnl}\n"
-        f"{'─'*32}\n"
-        f"PnL includes {SANDBOX_SLIPPAGE_PCT*100:.1f}% slippage both legs."
+        f"{'─' * 32}\n"
+        f"PnL includes {SANDBOX_SLIPPAGE_PCT * 100:.1f}% slippage both legs."
     )
 
     with open("sandbox_backtest_report.txt", "w", encoding="utf-8") as f:
@@ -373,17 +445,22 @@ def run_backtest_report():
     send_alert(report)
     print(report)
 
+
 def log_trade(row: list):
     with open("sandbox_trades.csv", "a", encoding="utf-8") as f:
         f.write(",".join(map(str, row)) + "\n")
 
+
 def show_dashboard():
-    print(f"\n{'='*40}\n"
-          f"  SANDBOX  {datetime.now().strftime('%H:%M:%S')}\n"
-          f"  Trades:{pnl_state['trade_count']}  "
-          f"Wins:{pnl_state['win_count']}  "
-          f"PnL:Rs.{pnl_state['total_pnl']:.2f}\n"
-          f"{'='*40}\n")
+    print(
+        f"\n{'=' * 40}\n"
+        f"  SANDBOX  {datetime.now().strftime('%H:%M:%S')}\n"
+        f"  Trades:{pnl_state['trade_count']}  "
+        f"Wins:{pnl_state['win_count']}  "
+        f"PnL:Rs.{pnl_state['total_pnl']:.2f}\n"
+        f"{'=' * 40}\n"
+    )
+
 
 # ── PROCESS INDEX ─────────────────────────────────────────────
 def process_index(index: str, sid: str):
@@ -409,21 +486,21 @@ def process_index(index: str, sid: str):
 
     tick_rec.record_candles(index, df)
 
-    if len(df) < 10:   # need at least 10 x 5-min bars (was 60 x 1-min)
+    if len(df) < 10:  # need at least 10 x 5-min bars (was 60 x 1-min)
         log_info(f"[{index}] {len(df)} 5-min bars -- need 10, waiting")
         return
 
     # [Item i / vi] Prefer live LTP for strike selection; fall back to candle
     live_ltp = fetch_live_ltp(
-        security_id=sid, index=index,
+        security_id=sid,
+        index=index,
         sandbox_base_url=SANDBOX_BASE_URL,
         access_token=ACCESS_TOKEN,
         client_id=CLIENT_ID,
     )
-    ltp  = live_ltp if live_ltp else float(df.iloc[-1]["close"])
+    ltp = live_ltp if live_ltp else float(df.iloc[-1]["close"])
     data = indices[index]
-    log_info(f"[{index}] {'LIVE' if live_ltp else 'HIST'} LTP={ltp:.2f} "
-             f"bars={len(df)}")
+    log_info(f"[{index}] {'LIVE' if live_ltp else 'HIST'} LTP={ltp:.2f} bars={len(df)}")
 
     # ── EXIT CHECK [Item iv] SL=5% / Target=10% ───────────────
     if data["in_trade"]:
@@ -437,29 +514,45 @@ def process_index(index: str, sid: str):
             with ORDER_LOCK:
                 if not data["in_trade"]:
                     return
-                exit_premium  = _fetch_premium_fn(data["opt_sid"], index)
-                exit_resp     = paper_order(data["opt_sid"], data["qty"],
-                                            "SELL", data["name"],
-                                            ltp=exit_premium)
-                exit_fill     = exit_resp.get("fill_price", exit_premium)
+                exit_premium = _fetch_premium_fn(data["opt_sid"], index)
+                exit_resp = paper_order(
+                    data["opt_sid"], data["qty"], "SELL", data["name"], ltp=exit_premium
+                )
+                exit_fill = exit_resp.get("fill_price", exit_premium)
                 exit_slippage = round(exit_fill - exit_premium, 2)
-                pnl           = (exit_fill - data["entry"]) * data["qty"]
+                pnl = (exit_fill - data["entry"]) * data["qty"]
 
-                pnl_state["total_pnl"]   += pnl
+                pnl_state["total_pnl"] += pnl
                 pnl_state["trade_count"] += 1
                 if pnl > 0:
                     pnl_state["win_count"] += 1
 
-                BACKTEST_TRADES.append([
-                    datetime.now(), data["name"], data["strategy"],
-                    reason, data["entry"], exit_fill,
-                    pnl, data["delta"], data["gamma"]
-                ])
-                log_trade([
-                    datetime.now(), data["name"], data["strategy"],
-                    reason, data["entry"], exit_fill,
-                    round(pnl, 2), data["delta"], data["gamma"]
-                ])
+                BACKTEST_TRADES.append(
+                    [
+                        datetime.now(),
+                        data["name"],
+                        data["strategy"],
+                        reason,
+                        data["entry"],
+                        exit_fill,
+                        pnl,
+                        data["delta"],
+                        data["gamma"],
+                    ]
+                )
+                log_trade(
+                    [
+                        datetime.now(),
+                        data["name"],
+                        data["strategy"],
+                        reason,
+                        data["entry"],
+                        exit_fill,
+                        round(pnl, 2),
+                        data["delta"],
+                        data["gamma"],
+                    ]
+                )
                 send_alert(
                     f"EXIT | {index} | {data['strategy']}\n"
                     f"Reason: {reason} | Option: {data['name']}\n"
@@ -481,17 +574,25 @@ def process_index(index: str, sid: str):
         log_info(f"[{index}] BOTH signal — placing parallel CE+PE")
         for direction in ("BUY", "SELL"):
             execute_signal(
-                index=index, ltp=ltp, signal=direction,
+                index=index,
+                ltp=ltp,
+                signal=direction,
                 strat_label=f"{strat_label}|BOTH",
-                context=sandbox_context, source="poll"
+                context=sandbox_context,
+                source="poll",
             )
         return
 
     # Standard single direction
     execute_signal(
-        index=index, ltp=ltp, signal=signal, strat_label=strat_label,
-        context=sandbox_context, source="poll"
+        index=index,
+        ltp=ltp,
+        signal=signal,
+        strat_label=strat_label,
+        context=sandbox_context,
+        source="poll",
     )
+
 
 # ── STARTUP BANNER ────────────────────────────────────────────
 startup_msg = (
@@ -500,7 +601,7 @@ startup_msg = (
     f"Feed: Candle poll every {POLL_SLEEP}s (5-min candles) [Item iii]\n"
     f"LTP: Live fetch before each trade [Item i/vi]\n"
     f"SL: 5%  Target: 10% [Item iv]\n"
-    f"Slippage: {SANDBOX_SLIPPAGE_PCT*100:.1f}% per fill [Item ii]\n"
+    f"Slippage: {SANDBOX_SLIPPAGE_PCT * 100:.1f}% per fill [Item ii]\n"
     f"Signals: OB+Engulfing near OB zone only [Item iii/v]\n"
     f"RSI/EMA: DISABLED [Item vii]\n"
     f"Webhook: port {WEBHOOK_PORT}\n"
@@ -529,10 +630,11 @@ while True:
         continue
 
     if now.hour < 9 or (now.hour == 9 and now.minute < 15):
-        wait = (now.replace(hour=9, minute=15, second=0,
-                            microsecond=0) - now).seconds
-        print(f"[{now.strftime('%H:%M')}] Pre-market -- "
-              f"opens in {wait//60}m {wait%60}s")
+        wait = (now.replace(hour=9, minute=15, second=0, microsecond=0) - now).seconds
+        print(
+            f"[{now.strftime('%H:%M')}] Pre-market -- "
+            f"opens in {wait // 60}m {wait % 60}s"
+        )
         time.sleep(min(60, wait))
         continue
 
