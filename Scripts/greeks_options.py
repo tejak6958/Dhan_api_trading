@@ -30,6 +30,8 @@ import math
 from datetime import datetime
 
 import pandas as pd
+
+from Strategies.strategies_breakout_trend import breakout_trend_signal
 from Strategies.strategies_order_block import detect_order_blocks, order_block_signal
 
 logger = logging.getLogger("DhanBot")
@@ -255,31 +257,41 @@ def combined_signal(df: pd.DataFrame, index: str, ltp: float) -> tuple[str | Non
     bull_eng = _bullish_engulfing(df)
     bear_eng = _bearish_engulfing(df)
 
+    # ── Step 3: Breakout Trend confirmation (BTF vote) ────────
+    btf_sig, _buy_lvl, _stop_lvl = breakout_trend_signal(df, index, ltp)
+
     logger.info(
         f"[SIGNAL] {index}: OB={ob_signal} "
-        f"bull_eng={bull_eng} bear_eng={bear_eng} ltp={ltp:.2f}"
+        f"bull_eng={bull_eng} bear_eng={bear_eng} "
+        f"btf={btf_sig} ltp={ltp:.2f}"
     )
 
-    # ── Step 3: Combine + parallel logic (Item v) ─────────────
+    # ── Step 4: Combine + parallel logic (Item v) ─────────────
     # Case: price in BOTH OB zones simultaneously (range-bound)
     if ob_signal == "BOTH":
         if bull_eng and bear_eng:
-            return ("BOTH", "OB+Engulfing|BOTH")
+            label = "OB+Engulfing|BOTH"
+            if btf_sig == "BUY":
+                label = "OB+BullEng+BTF|BOTH"
+            return ("BOTH", label)
         elif bull_eng:
-            return ("BUY", "OB+BullEng")
+            label = "OB+BullEng+BTF" if btf_sig == "BUY" else "OB+BullEng"
+            return ("BUY", label)
         elif bear_eng:
-            return ("SELL", "OB+BearEng")
+            label = "OB+BearEng+BTF" if btf_sig == "SELL" else "OB+BearEng"
+            return ("SELL", label)
         else:
-            # In both zones but no engulfing confirmation → wait
             logger.info(f"[SIGNAL] {index}: BOTH OB zones active, no engulfing — wait")
             return (None, "ob_both_no_eng")
 
     # Case: single OB direction with matching engulfing
     if ob_signal == "BUY" and bull_eng:
-        return ("BUY", "OB+BullEng")
+        label = "OB+BullEng+BTF" if btf_sig == "BUY" else "OB+BullEng"
+        return ("BUY", label)
 
     if ob_signal == "SELL" and bear_eng:
-        return ("SELL", "OB+BearEng")
+        label = "OB+BearEng+BTF" if btf_sig == "SELL" else "OB+BearEng"
+        return ("SELL", label)
 
     # OB signal present but engulfing doesn't confirm → wait
     logger.info(f"[SIGNAL] {index}: OB={ob_signal} but no matching engulfing — wait")

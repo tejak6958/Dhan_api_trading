@@ -21,3 +21,9 @@ requests
 
 # Load credentials from .env file
 python-dotenv
+
+# Webhook receiver (TradingView alerts -> execute_signal)
+flask
+
+# WebSocket live feed (dhan_live.py only)
+websockets
